@@ -1,0 +1,22 @@
+[package]
+name = "tracing-rolling"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+parking_lot = "0.12.1"
+regex = "1.7.1"
+time = { version = "0.3.20", features = [
+    "formatting",
+    "local-offset",
+    "macros",
+    "parsing",
+] }
+tracing = "0.1"
+tracing-subscriber = "0.3.16"
+
+
+[dev-dependencies]
+tokio = { version = "1.26.0", features = ["full"] }
