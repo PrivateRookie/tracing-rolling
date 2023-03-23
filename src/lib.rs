@@ -6,22 +6,41 @@ use std::{
 
 use parking_lot::{Mutex, MutexGuard};
 use time::{
-    format_description::{parse_owned, OwnedFormatItem},
+    format_description::{parse_owned, Component, OwnedFormatItem},
     Date, Duration, OffsetDateTime, Time, UtcOffset,
 };
 use tracing_subscriber::fmt::MakeWriter;
 
-pub trait Checker<W: Write> {
+pub trait Checker: Sized {
+    type W: Write;
     fn should_update(&self) -> bool;
-    fn new_writer(&self) -> io::Result<W>;
+    fn new_writer(&self) -> io::Result<Self::W>;
+    /// create a buffered writer with default size: 4K
+    fn buffered(self) -> Buffered<Self, Self::W> {
+        Buffered {
+            checker: self,
+            size: 4096,
+        }
+    }
+    /// create a buffered writer with specified buffer size
+    fn buffer_with(self, size: usize) -> Buffered<Self, Self::W> {
+        Buffered {
+            checker: self,
+            size,
+        }
+    }
+
+    fn build(self) -> io::Result<Rolling<Self, Self::W>> {
+        Rolling::new(self)
+    }
 }
 
-pub struct Rolling<C: Checker<W>, W: Write> {
+pub struct Rolling<C: Checker<W = W>, W: Write> {
     writer: Mutex<W>,
     checker: C,
 }
 
-impl<C: Checker<W>, W: Write> Rolling<C, W> {
+impl<C: Checker<W = W>, W: Write> Rolling<C, W> {
     pub fn new(checker: C) -> io::Result<Self> {
         let file = Mutex::new(checker.new_writer()?);
         let writer = file;
@@ -39,7 +58,7 @@ impl<C: Checker<W>, W: Write> Rolling<C, W> {
     }
 }
 
-impl<'a, C: Checker<W>, W: Write + 'a> MakeWriter<'a> for Rolling<C, W> {
+impl<'a, C: Checker<W = W>, W: Write + 'a> MakeWriter<'a> for Rolling<C, W> {
     type Writer = RollingWriter<'a, W>;
 
     fn make_writer(&'a self) -> Self::Writer {
@@ -71,7 +90,8 @@ pub trait Period {
     fn duration(&self) -> &Duration;
 }
 
-impl<P: Period> Checker<File> for P {
+impl<P: Period> Checker for P {
+    type W = File;
     fn should_update(&self) -> bool {
         let file_dt = match self.previous_dt() {
             Ok(v) => v,
@@ -211,16 +231,59 @@ pub struct Daily {
 impl Daily {
     pub const DURATION: Duration = Duration::DAY;
 
-    pub fn new(path: impl AsRef<Path>, offset: impl Into<Option<UtcOffset>>) -> Self {
+    fn ensure_year_month_day(fmt: &OwnedFormatItem) {
+        match fmt {
+            OwnedFormatItem::Compound(items) => {
+                let mut year = false;
+                let mut month = false;
+                let mut day = false;
+                for item in &items[..] {
+                    match item {
+                        OwnedFormatItem::Component(Component::Year(_)) => {
+                            year = !year;
+                        }
+                        OwnedFormatItem::Component(Component::Month(_)) => {
+                            month = !month;
+                        }
+                        OwnedFormatItem::Component(Component::Day(_)) => {
+                            day = !day;
+                        }
+                        _ => {}
+                    }
+                }
+                if !(year && month && day) {
+                    panic!("invalid daily format");
+                }
+            }
+            _ => panic!("expect compound format"),
+        }
+    }
+
+    /// **NOTE: if fmt is specified, it should be valid time format_description and contain
+    /// year, month, day**
+    /// 
+    /// default fmt is `[year]-[month]-[day]`
+    pub fn new<S>(
+        path: impl AsRef<Path>,
+        fmt: impl Into<Option<S>>,
+        offset: impl Into<Option<UtcOffset>>,
+    ) -> Self
+    where
+        S: std::fmt::Display,
+    {
         let ext = path
             .as_ref()
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or_default();
-        let fmt = path
-            .as_ref()
-            .with_extension(format!("[year]-[month]-[day].{ext}"));
+
+        let ext = fmt
+            .into()
+            .map(|f| format!("{f}.{ext}"))
+            .unwrap_or_else(|| format!("[year]-[month]-[day].{ext}"));
+        let fmt = path.as_ref().with_extension(ext);
         let fmt = parse_owned::<1>(&format!("{}", fmt.display())).unwrap();
+        Self::ensure_year_month_day(&fmt);
         Self {
             offset: offset.into().unwrap_or(UtcOffset::UTC),
             fmt,
@@ -254,23 +317,23 @@ impl Period for Daily {
     }
 }
 
-pub struct Buffered<C: Checker<File>> {
+pub struct Buffered<C: Checker<W = W>, W: Write> {
     checker: C,
     size: usize,
 }
 
-impl<C: Checker<File>> Buffered<C> {
+impl<C: Checker<W = W>, W: Write> Buffered<C, W> {
     pub fn new(checker: C, size: usize) -> Self {
         Self { checker, size }
     }
 }
 
-impl<C: Checker<File>> Checker<BufWriter<File>> for Buffered<C> {
+impl<C: Checker<W = W>, W: Write> Checker for Buffered<C, W> {
+    type W = BufWriter<W>;
     fn should_update(&self) -> bool {
         self.checker.should_update()
     }
-
-    fn new_writer(&self) -> io::Result<BufWriter<File>> {
+    fn new_writer(&self) -> io::Result<BufWriter<W>> {
         Ok(BufWriter::with_capacity(
             self.size,
             self.checker.new_writer()?,
