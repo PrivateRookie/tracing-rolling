@@ -261,7 +261,7 @@ impl Daily {
 
     /// **NOTE: if fmt is specified, it should be valid time format_description and contain
     /// year, month, day**
-    /// 
+    ///
     /// default fmt is `[year]-[month]-[day]`
     pub fn new<S>(
         path: impl AsRef<Path>,
@@ -277,12 +277,21 @@ impl Daily {
             .and_then(|ext| ext.to_str())
             .unwrap_or_default();
 
-        let ext = fmt
+        let file_stem = path
+            .as_ref()
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+
+        let file_name = fmt
             .into()
-            .map(|f| format!("{f}.{ext}"))
-            .unwrap_or_else(|| format!("[year]-[month]-[day].{ext}"));
-        let fmt = path.as_ref().with_extension(ext);
-        let fmt = parse_owned::<1>(&format!("{}", fmt.display())).unwrap();
+            .map(|f| format!("{file_stem}-{f}.{ext}"))
+            .unwrap_or_else(|| format!("{file_stem}-[year]-[month]-[day].{ext}"));
+        let fmt = parse_owned::<1>(&format!(
+            "{}",
+            path.as_ref().with_file_name(file_name).display()
+        ))
+        .unwrap();
         Self::ensure_year_month_day(&fmt);
         Self {
             offset: offset.into().unwrap_or(UtcOffset::UTC),
