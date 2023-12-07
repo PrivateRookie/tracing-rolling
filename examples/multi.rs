@@ -8,35 +8,37 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 #[tokio::main]
 async fn main() {
-    let all = Daily::new("logs/all.log", "[year][month][day]", offset!(+8))
+    let (all, token_all) = Daily::new("logs/all.log", "[year][month][day]", offset!(+8))
         .build()
-        .unwrap()
-        .with_filter(|e| !matches!(e.target(), "multi::a" | "multi::b"));
-    let a = Daily::new("logs/a.log", "[year][month][day]", offset!(+8))
+        .unwrap();
+    let (a, token_a) = Daily::new("logs/a.log", "[year][month][day]", offset!(+8))
         .build()
-        .unwrap()
-        .with_filter(|e| e.target() == "multi::a");
-    let b = Daily::new("logs/b.log", "[year][month][day]", offset!(+8))
+        .unwrap();
+    let (b, token_b) = Daily::new("logs/b.log", "[year][month][day]", offset!(+8))
         .build()
-        .unwrap()
-        .with_filter(|e| e.target() == "multi::b");
+        .unwrap();
 
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_target(false)
         .with_file(true)
         .with_line_number(true)
-        .with_writer(all.and(a).and(b))
+        .with_writer(
+            all.with_filter(|e| !matches!(e.target(), "multi::a" | "multi::b"))
+                .and(a.with_filter(|e| e.target() == "multi::a"))
+                .and(b.with_filter(|e| e.target() == "multi::b")),
+        )
         .init();
     let mut count = 0;
     info!("start");
-    loop {
+    while count < 100 {
         count += 1;
         sleep(Duration::from_millis(50)).await;
         info!("{count}");
         a::foo();
         b::bar();
     }
+    drop((token_a, token_all, token_b));
 }
 
 mod a {

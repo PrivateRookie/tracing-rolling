@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{self, BufWriter, Write},
     path::Path,
+    sync::Arc,
 };
 
 use parking_lot::{Mutex, MutexGuard};
@@ -30,21 +31,32 @@ pub trait Checker: Sized {
         }
     }
 
-    fn build(self) -> io::Result<Rolling<Self, Self::W>> {
-        Rolling::new(self)
+    fn build(self) -> io::Result<(Rolling<Self, Self::W>, Token<Self::W>)> {
+        let fd = Arc::new(Mutex::new(self.new_writer()?));
+        let t = Token(fd.clone());
+        let r = Rolling::new(self, fd);
+        Ok((r, t))
+    }
+}
+
+pub struct Token<W: Write>(Arc<Mutex<W>>);
+
+impl<W: Write> Drop for Token<W> {
+    fn drop(&mut self) {
+        if let Err(e) = self.0.lock().flush() {
+            eprintln!("drop writer {e}");
+        }
     }
 }
 
 pub struct Rolling<C: Checker<W = W>, W: Write> {
-    writer: Mutex<W>,
+    writer: Arc<Mutex<W>>,
     checker: C,
 }
 
 impl<C: Checker<W = W>, W: Write> Rolling<C, W> {
-    pub fn new(checker: C) -> io::Result<Self> {
-        let file = Mutex::new(checker.new_writer()?);
-        let writer = file;
-        Ok(Self { writer, checker })
+    pub fn new(checker: C, writer: Arc<Mutex<W>>) -> Self {
+        Self { writer, checker }
     }
 
     fn update_writer(&self) -> io::Result<()> {
