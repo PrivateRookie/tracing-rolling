@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{self, BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -39,6 +39,7 @@ pub trait Checker: Sized {
     }
 }
 
+#[must_use = "must manual drop to ensure flush file when process exits"]
 pub struct Token<W: Write>(Arc<Mutex<W>>);
 
 impl<W: Write> Drop for Token<W> {
@@ -359,5 +360,26 @@ impl<C: Checker<W = W>, W: Write> Checker for Buffered<C, W> {
             self.size,
             self.checker.new_writer()?,
         ))
+    }
+}
+
+/// construct a non rolling file
+pub struct ConstFile(PathBuf);
+
+impl Checker for ConstFile {
+    type W = File;
+
+    fn should_update(&self) -> bool {
+        false
+    }
+
+    fn new_writer(&self) -> io::Result<Self::W> {
+        File::options().append(true).create(true).open(&self.0)
+    }
+}
+
+impl ConstFile {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self(path.as_ref().to_path_buf())
     }
 }
